@@ -1,0 +1,87 @@
+name: Build and Push Docker Image to AWS ECR
+
+## Ejecutamos por cada push
+on:
+  push:
+    branches:
+      - main
+
+
+## definimos los jobs
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      ## Checkout de la versión actual del repositorio
+      - name: Checkout de la versión actual del repositorio
+        uses: actions/checkout@v4
+
+      ## Configuramos las credenciales para conectarlos al AWS por medio del usuario AIM
+      - name: Configuramos las credenciales para conectarlos al AWS por medio del usuario AIM
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      ## Ingresamos al ECR
+      - name: Ingresamos al ECR
+        id: login-ecre
+        uses: aws-actions/amazon-ecr-login@v2
+
+      ## Preparamos y Generamos la Imagen y la enviamos al ECR
+      - name: Preparamos y Generamos la Imagen y la enviamos al ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ## ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORI_URI }}
+          ECR_REPOSITORY: "116933114869.dkr.ecr.us-east-1.amazonaws.com/demostracion"
+          IMAGE_TAG: latest
+          
+        run: |
+        
+          # Construimos el contenedor y lo tageamos en el reposditorio correspondiente
+          echo "Construimos y tagearmos (-t) el contenedor con 'docker build -t ${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} .'"
+          docker build --no-cache -t $ECR_REPOSITORY:$IMAGE_TAG .
+
+          # Push the image to ECR
+          echo "Enviamos al repositorio el contenedor con 'docker push ${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}'"
+          docker push $ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Instalar el YQ para poder actualizar el Manifiesto
+        run: |
+          sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq
+          sudo chmod +x /usr/bin/yq
+          
+      - name: Obtenemos la fecha y hora en un formato adecuado
+        run: echo "NOW=$(date +'%Y-%m-%dT%H:%M:%S')" >> $GITHUB_ENV
+        
+      - name: Actualizar el archivo deployment.yaml con la ultima versión del docker
+        run: |
+          ## Actualizamos el Tag en el deployment usando el yq
+          ## yq -i '.spec.template.spec.containers[0].image = "ping-demo:'"${GITHUB_ENV: -7}"'"' ./k8s/k8s-deployment.yaml
+
+          ## Colocamos la URI del repositorio de ECR
+          ## yq -i '.spec.template.spec.containers[0].image = "116933114869.dkr.ecr.us-east-1.amazonaws.com"' ./k8s/k8s-deployment.yaml
+          ## yq -i '.spec.template.spec.containers[0].image = "public.ecr.aws/z4u0p9o7/argocd/demopingpub"' ./k8s/k8s-deployment.yaml
+          ## yq -i '.spec.template.spec.containers[0].name = "ping-demo"' ./k8s/k8s-deployment.yaml
+
+      - name: crear archivo de confirmación y versión para que existan cambios a aplicar y no genere error
+        run: |
+          echo "Variables Generadas {{ $GITHUB_ENV }}" >> k8s/confirm.ver
+          git add k8s/confirm.ver
+
+       ##
+       ## Aplicamos Commit y Push
+       ## Para el caso del Push vamos a requerir un permiso especial, para otorgarlo hacemos lo siguiente
+       ## Desde el manel principal del proyecto seleccionamos Settings --> Actions (lado izquiero) --> General -->
+       ## vamos a la sección de Workflow permissions y seleccionamos la opción de Read repository contents 
+       ## and packages permissions y finalmente hacemos clic en el botón de Save para aplicar los cambios  
+      - name: Hacemos Commit & Push de los cambios por el archivo de deployment en el repositorio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions@noreply"
+          git add k8s/k8s-deployment.yaml
+          git commit -m 'Actualización automática :: {{ $GITHUB_ENV }}'
+          git push origin main
+          
